@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    
+    <!-- PWA / 行動裝置 App Meta 標籤 -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0f1d">
+    <title>氣象數據融合 BETA</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        slate: { 850: '#151f32', 950: '#0a0f1d' }
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        /* 隱藏滾動條但保持滑動 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .glass-panel { 
+            background: rgba(15, 23, 42, 0.75); 
+            backdrop-filter: blur(12px); 
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08); 
+        }
+        .card-bg { 
+            background-color: rgba(15, 23, 42, 0.9); 
+            border: 1px solid rgba(255, 255, 255, 0.06); 
+        }
+        
+        /* iOS Safe Area 邊距處理 */
+        .pt-safe { padding-top: env(safe-area-inset-top); }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+        
+        body { touch-action: manipulation; }
+
+        /* 自訂 Slider 樣式 */
+        input[type=range] {
+            accent-color: #3b82f6;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 h-full font-sans antialiased flex flex-col justify-between overflow-hidden">
+
+    <!-- Header Navigation -->
+    <header class="sticky top-0 z-40 glass-panel border-b border-slate-800/80 px-4 py-3 pt-safe shadow-xl flex-none">
+        <div class="max-w-7xl mx-auto flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2.5">
+                <div class="p-2 bg-blue-600/20 text-blue-400 rounded-xl border border-blue-500/30 flex items-center justify-center">
+                    <i class="fa-solid fa-cloud-bolt text-xl text-blue-400"></i>
+                </div>
+                <div>
+                    <h1 class="text-base font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-teal-400 leading-tight">
+                        氣象數據融合 BETA
+                    </h1>
+                    <p class="text-[10px] text-slate-400" id="lastUpdatedTime">更新中...</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-1.5">
+                <button id="gpsBtn" class="bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 border border-blue-500/30 p-2 rounded-xl transition text-xs flex items-center gap-1 active:scale-95">
+                    <i class="fa-solid fa-location-crosshairs text-sm"></i>
+                    <span class="text-xs hidden sm:inline">定位</span>
+                </button>
+                <button id="refreshBtn" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 p-2 rounded-xl transition active:scale-95">
+                    <i class="fa-solid fa-arrows-rotate text-sm" id="refreshIcon"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 mt-2.5">
+            <select id="countySelect" class="bg-slate-900/90 text-slate-200 border border-slate-800 text-xs rounded-xl p-2 focus:ring-1 focus:ring-blue-500 focus:outline-none">
+            </select>
+            <select id="districtSelect" class="bg-slate-900/90 text-slate-200 border border-slate-800 text-xs rounded-xl p-2 focus:ring-1 focus:ring-blue-500 focus:outline-none">
+            </select>
+        </div>
+    </header>
+
+    <!-- App Content Scrollable Container -->
+    <main class="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+
+        <!-- TAB 1: 即時氣象面板 -->
+        <div id="tab-overview" class="tab-content space-y-4">
+            <section class="glass-panel rounded-3xl p-5 relative overflow-hidden shadow-2xl">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <div class="flex items-center gap-1.5">
+                            <h2 class="text-xl font-black text-white" id="currentLocationText">--</h2>
+                        </div>
+                        <p class="text-[10px] text-slate-400 mt-0.5" id="locationCoordsText">Lat: --, Lon: --</p>
+                    </div>
+                    <span class="inline-flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700" id="trustLevelBadge">
+                        數據計算中
+                    </span>
+                </div>
+
+                <div class="mt-5 flex items-baseline justify-between">
+                    <div class="flex items-baseline">
+                        <span class="text-6xl font-black tracking-tight text-white" id="currentTemp">--</span>
+                        <span class="text-2xl font-light text-slate-400 ml-1">°C</span>
+                    </div>
+
+                    <div class="text-right">
+                        <p class="text-base font-semibold text-slate-200 flex items-center justify-end gap-1.5" id="currentDesc">
+                            <i class="fa-solid fa-spinner fa-spin text-slate-400"></i>
+                        </p>
+                        <p class="text-[10px] text-slate-400 mt-0.5">自訂權重加權校正</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2.5 mt-6 pt-4 border-t border-slate-800/80">
+                    <div class="bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800/80">
+                        <div class="text-[11px] text-slate-400 flex items-center gap-1"><i class="fa-solid fa-umbrella text-blue-400"></i> 降雨機率</div>
+                        <div class="text-base font-bold text-slate-100 mt-0.5" id="currentPop">-- %</div>
+                    </div>
+                    <div class="bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800/80">
+                        <div class="text-[11px] text-slate-400 flex items-center gap-1"><i class="fa-solid fa-cloud-showers-heavy text-indigo-400"></i> 預估雨量</div>
+                        <div class="text-base font-bold text-slate-100 mt-0.5" id="currentQpf">-- mm/h</div>
+                    </div>
+                    <div class="bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800/80">
+                        <div class="text-[11px] text-slate-400 flex items-center gap-1"><i class="fa-solid fa-droplet text-cyan-400"></i> 相對濕度</div>
+                        <div class="text-base font-bold text-slate-100 mt-0.5" id="currentHumidity">-- %</div>
+                    </div>
+                    <div class="bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800/80">
+                        <div class="text-[11px] text-slate-400 flex items-center gap-1"><i class="fa-solid fa-wind text-teal-400"></i> 地面風速</div>
+                        <div class="text-base font-bold text-slate-100 mt-0.5" id="currentWind">-- km/h</div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="glass-panel rounded-3xl p-4">
+                <div class="pb-2.5 mb-3 border-b border-slate-800/80 flex justify-between items-center">
+                    <h3 class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-clock text-blue-400"></i> 24小時逐時預報
+                    </h3>
+                    <span class="text-[10px] text-slate-400">👈 左右滑動查看</span>
+                </div>
+                
+                <div class="flex gap-2.5 overflow-x-auto pb-1 pt-1 no-scrollbar scroll-smooth" id="hourlyCardsContainer">
+                </div>
+            </section>
+
+            <section class="glass-panel rounded-3xl p-4">
+                <div class="pb-2.5 mb-3 border-b border-slate-800/80">
+                    <h3 class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-calendar-days text-purple-400"></i> 未來 7 天預報
+                    </h3>
+                </div>
+                <div class="grid grid-cols-2 gap-2" id="dailyCardsContainer">
+                </div>
+            </section>
+        </div>
+
+        <!-- TAB 2: API 數據源控制與權重調校 -->
+        <div id="tab-sources" class="tab-content hidden space-y-4">
+            <section class="glass-panel rounded-3xl p-4 shadow-lg">
+                <div class="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
+                    <div class="flex items-center gap-1.5">
+                        <i class="fa-solid fa-sliders text-blue-400 text-sm"></i>
+                        <h2 class="text-xs font-bold text-slate-200">API 開關與權重調校</h2>
+                    </div>
+                    <div id="activeSourcesCount" class="text-[10px] bg-emerald-950 text-emerald-300 px-2.5 py-0.5 rounded-full border border-emerald-800 font-medium">
+                        檢測中
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-3" id="sourceCardsContainer">
+                </div>
+            </section>
+
+            <section class="glass-panel rounded-3xl p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                        <i class="fa-solid fa-chart-simple text-indigo-400"></i> 各源氣溫數據比對
+                    </h3>
+                    <span class="text-[10px] text-slate-400">溫差極值: <span class="text-slate-200 font-medium" id="tempSpread">-- °C</span></span>
+                </div>
+                <div class="relative h-48 w-full flex items-center justify-center">
+                    <canvas id="radarChart"></canvas>
+                </div>
+            </section>
+        </div>
+
+        <!-- TAB 3: 說明（免責聲明與更新日誌） -->
+        <div id="tab-info" class="tab-content hidden space-y-4">
+            <!-- 免責聲明卡片 -->
+            <section class="glass-panel rounded-3xl p-5 shadow-lg">
+                <div class="flex items-center gap-2 pb-3 mb-3 border-b border-slate-800">
+                    <i class="fa-solid fa-triangle-exclamation text-amber-400 text-base"></i>
+                    <h2 class="text-sm font-bold text-slate-100">免責聲明 Disclaimer</h2>
+                </div>
+                <div class="text-xs text-slate-300 leading-relaxed space-y-2.5">
+                    <p>
+                        1. 本系統所呈現之氣象數據係透過第三方公開 API（包含 CWA 中央氣象署、Open-Meteo、WeatherAPI、OpenWeatherMap、Tomorrow.io）進行即時演算與加權融合，僅供學術研究、個人參考與技術測試使用。
+                    </p>
+                    <p>
+                        2. 融合數據可能受限於原 API 數據延遲、各家氣象預報模型差異或網路傳輸影響，系統無法保證預報結果之百分之百準確性與實時性。
+                    </p>
+                    <p>
+                        3. 於颱風、暴雨、地震等災害氣象應變期間，<strong>請一律以「中華民國交通部中央氣象署」及相關政府單位發布之官方氣象預報與防災警報為唯一基準</strong>。
+                    </p>
+                    <p>
+                        4. 使用者因參考本系統數據而採取之任何行動及其可能衍生之風險與損害，本開發團隊不承擔任何法律責任。
+                    </p>
+                </div>
+            </section>
+
+            <!-- 更新日誌卡片 -->
+            <section class="glass-panel rounded-3xl p-5 shadow-lg">
+                <div class="flex items-center gap-2 pb-3 mb-3 border-b border-slate-800">
+                    <i class="fa-solid fa-code-commit text-blue-400 text-base"></i>
+                    <h2 class="text-sm font-bold text-slate-100">更新日誌 Changelog</h2>
+                </div>
+                <div class="space-y-3">
+                    <!-- BETA 2.0 新增 -->
+                    <div class="bg-slate-900/80 p-3.5 rounded-2xl border border-blue-500/30">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-xs font-bold text-blue-400">BETA 2.0</span>
+                            <span class="text-[10px] text-slate-400 font-mono">2026/10/10</span>
+                        </div>
+                        <p class="text-xs text-slate-200">重構天氣數據算法準確度有待測試</p>
+                    </div>
+
+                    <!-- BETA 1.0 -->
+                    <div class="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800/80">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <span class="text-xs font-bold text-slate-400">BETA 1.0</span>
+                            <span class="text-[10px] text-slate-400 font-mono">2026/10/09</span>
+                        </div>
+                        <p class="text-xs text-slate-300">初始測試版 by XIE060120</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+    </main>
+
+    <!-- App Bottom Tab Bar Navigation -->
+    <nav class="glass-panel border-t border-slate-800/80 px-6 py-2 pb-safe flex justify-around items-center flex-none z-40">
+        <button onclick="switchTab('overview')" id="nav-overview" class="flex flex-col items-center gap-1 text-blue-400 transition active:scale-90">
+            <i class="fa-solid fa-cloud-sun-rain text-lg"></i>
+            <span class="text-[10px] font-bold">天氣概況</span>
+        </button>
+        <button onclick="switchTab('sources')" id="nav-sources" class="flex flex-col items-center gap-1 text-slate-500 transition active:scale-90">
+            <i class="fa-solid fa-layer-group text-lg"></i>
+            <span class="text-[10px] font-bold">數據源調校</span>
+        </button>
+        <button onclick="switchTab('info')" id="nav-info" class="flex flex-col items-center gap-1 text-slate-500 transition active:scale-90">
+            <i class="fa-solid fa-circle-info text-lg"></i>
+            <span class="text-[10px] font-bold">說明</span>
+        </button>
+    </nav>
+
+    <script>
+        const API_KEYS = {
+            owm: "3e7b3f9a69185cb134825c47a41ab885",
+            weatherapi: "4bee21b5054c49639f510334260810",
+            tomorrow: "6E8UP3VIYcPPNGDJ9roJxAMvmzdaerkt",
+            cwa: "CWA-F54EAAA9-48E1-4CAC-9B31-54BEB05B9D22"
+        };
+
+        const TAIWAN_LOCATIONS = {
+            "臺北市": [
+                { name: "中正區", lat: 25.0324, lon: 121.5190 }, { name: "大安區", lat: 25.0264, lon: 121.5435 },
+                { name: "信義區", lat: 25.0332, lon: 121.5641 }, { name: "士林區", lat: 25.0938, lon: 121.5249 },
+                { name: "北投區", lat: 25.1321, lon: 121.4986 }, { name: "中山區", lat: 25.0686, lon: 121.5332 },
+                { name: "內湖區", lat: 25.0797, lon: 121.5947 }, { name: "南港區", lat: 25.0384, lon: 121.6072 },
+                { name: "松山區", lat: 25.0599, lon: 121.5574 }, { name: "萬華區", lat: 25.0354, lon: 121.4997 },
+                { name: "大同區", lat: 25.0631, lon: 121.5132 }, { name: "文山區", lat: 24.9892, lon: 121.5701 }
+            ],
+            "新北市": [
+                { name: "板橋區", lat: 25.0116, lon: 121.4658 }, { name: "新莊區", lat: 25.0375, lon: 121.4504 },
+                { name: "三重區", lat: 25.0615, lon: 121.4878 }, { name: "淡水區", lat: 25.1694, lon: 121.4408 },
+                { name: "中和區", lat: 24.9982, lon: 121.5002 }, { name: "永和區", lat: 25.0078, lon: 121.5152 },
+                { name: "土城區", lat: 24.9722, lon: 121.4433 }, { name: "新店區", lat: 24.9678, lon: 121.5417 },
+                { name: "汐止區", lat: 25.0681, lon: 121.6619 }, { name: "林口區", lat: 25.0775, lon: 121.3917 }
+            ],
+            "桃園市": [
+                { name: "桃園區", lat: 24.9936, lon: 121.3010 }, { name: "中壢區", lat: 24.9587, lon: 121.2248 },
+                { name: "八德區", lat: 24.9286, lon: 121.2831 }, { name: "龜山區", lat: 24.9922, lon: 121.3375 }
+            ],
+            "台中市": [
+                { name: "西屯區", lat: 24.1812, lon: 120.6177 }, { name: "北區", lat: 24.1578, lon: 120.6823 },
+                { name: "南屯區", lat: 24.1378, lon: 120.6425 }, { name: "北屯區", lat: 24.1825, lon: 120.6861 }
+            ],
+            "高雄市": [
+                { name: "前鎮區", lat: 22.5864, lon: 120.3175 }, { name: "左營區", lat: 22.6897, lon: 120.2972 },
+                { name: "三民區", lat: 22.6469, lon: 120.3044 }, { name: "鳳山區", lat: 22.6269, lon: 120.3575 }
+            ],
+            "台南市": [
+                { name: "永康區", lat: 23.0261, lon: 120.2572 }, { name: "東區", lat: 22.9808, lon: 120.2228 },
+                { name: "安南區", lat: 23.0475, lon: 120.1856 }
+            ]
+        };
+
+        const DATA_SOURCES = {
+            cwa: { name: 'CWA 氣象署', desc: '台灣官方站點', color: '#3b82f6', enabled: true, weight: 100, realData: null },
+            openmeteo: { name: 'Open-Meteo', desc: 'ECMWF 頂級模型', color: '#10b981', enabled: true, weight: 100, realData: null },
+            weatherapi: { name: 'WeatherAPI', desc: '實時高精度 API', color: '#8b5cf6', enabled: true, weight: 100, realData: null },
+            owm: { name: 'OpenWeatherMap', desc: '全球即時站點', color: '#f59e0b', enabled: true, weight: 100, realData: null },
+            tomorrow: { name: 'Tomorrow.io', desc: '微氣候測繪', color: '#ec4899', enabled: true, weight: 100, realData: null }
+        };
+
+        let currentCounty = "臺北市";
+        let currentDistrict = TAIWAN_LOCATIONS["臺北市"][0];
+        let radarChartInstance = null;
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initDropdowns();
+            initCharts();
+            renderSourceCards();
+            fetchAllRealData();
+
+            document.getElementById('countySelect')?.addEventListener('change', (e) => {
+                currentCounty = e.target.value;
+                updateDistrictDropdown();
+                fetchAllRealData();
+            });
+
+            document.getElementById('districtSelect')?.addEventListener('change', (e) => {
+                const idx = parseInt(e.target.value);
+                currentDistrict = TAIWAN_LOCATIONS[currentCounty][idx];
+                fetchAllRealData();
+            });
+
+            document.getElementById('refreshBtn')?.addEventListener('click', fetchAllRealData);
+            document.getElementById('gpsBtn')?.addEventListener('click', handleGPS);
+        });
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`tab-${tabName}`)?.classList.remove('hidden');
+
+            document.getElementById('nav-overview').className = `flex flex-col items-center gap-1 ${tabName === 'overview' ? 'text-blue-400' : 'text-slate-500'} transition active:scale-90`;
+            document.getElementById('nav-sources').className = `flex flex-col items-center gap-1 ${tabName === 'sources' ? 'text-blue-400' : 'text-slate-500'} transition active:scale-90`;
+            document.getElementById('nav-info').className = `flex flex-col items-center gap-1 ${tabName === 'info' ? 'text-blue-400' : 'text-slate-500'} transition active:scale-90`;
+            
+            if (tabName === 'sources' && radarChartInstance) {
+                setTimeout(() => radarChartInstance.update(), 100);
+            }
+        }
+
+        function initDropdowns() {
+            const countySelect = document.getElementById('countySelect');
+            if (countySelect) {
+                countySelect.innerHTML = Object.keys(TAIWAN_LOCATIONS).map(c => `<option value="${c}">${c}</option>`).join('');
+                countySelect.value = currentCounty;
+            }
+            updateDistrictDropdown();
+        }
+
+        function updateDistrictDropdown() {
+            const districtSelect = document.getElementById('districtSelect');
+            const list = TAIWAN_LOCATIONS[currentCounty] || [];
+            if (districtSelect) {
+                districtSelect.innerHTML = list.map((d, idx) => `<option value="${idx}">${d.name}</option>`).join('');
+                districtSelect.value = 0;
+            }
+            currentDistrict = list[0];
+        }
+
+        function handleGPS() {
+            if (!navigator.geolocation) return alert("瀏覽器不支援 GPS 定位");
+            navigator.geolocation.getCurrentPosition(pos => {
+                const { latitude, longitude } = pos.coords;
+                let minDist = Infinity, bestC = "", bestD = null;
+
+                for (const [c, list] of Object.entries(TAIWAN_LOCATIONS)) {
+                    for (const d of list) {
+                        const dist = Math.hypot(d.lat - latitude, d.lon - longitude);
+                        if (dist < minDist) {
+                            minDist = dist; bestC = c; bestD = d;
+                        }
+                    }
+                }
+                if (bestD) {
+                    currentCounty = bestC;
+                    currentDistrict = bestD;
+                    document.getElementById('countySelect').value = currentCounty;
+                    updateDistrictDropdown();
+                    fetchAllRealData();
+                }
+            });
+        }
+
+        function toggleSource(key) {
+            DATA_SOURCES[key].enabled = !DATA_SOURCES[key].enabled;
+            renderSourceCards();
+            fuseAndRenderData();
+        }
+
+        function updateWeight(key, val) {
+            DATA_SOURCES[key].weight = parseInt(val);
+            document.getElementById(`weightVal-${key}`).textContent = `${val}%`;
+            renderSourceCards();
+            fuseAndRenderData();
+        }
+
+        function renderSourceCards() {
+            const container = document.getElementById('sourceCardsContainer');
+            const activeSources = Object.values(DATA_SOURCES).filter(s => s.enabled && s.realData !== null);
+            const totalWeight = activeSources.reduce((acc, s) => acc + s.weight, 0);
+
+            document.getElementById('activeSourcesCount').textContent = `已啟用 ${activeSources.length}/5 源 (總權重: ${totalWeight})`;
+
+            container.innerHTML = Object.entries(DATA_SOURCES).map(([key, src]) => {
+                const isOnline = src.enabled && src.realData !== null;
+                const effectivePercent = (isOnline && totalWeight > 0) ? Math.round((src.weight / totalWeight) * 100) : 0;
+
+                return `
+                    <div class="bg-slate-900/80 p-3.5 rounded-2xl border ${src.enabled ? (isOnline ? 'border-emerald-800/60' : 'border-amber-800/40') : 'border-slate-800 opacity-60'} flex flex-col gap-2.5">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold text-xs" style="color: ${src.color}">${src.name}</span>
+                                    <span class="text-[10px] text-slate-400">${src.desc}</span>
+                                </div>
+                                <div class="text-[11px] text-slate-300 mt-1">
+                                    實測溫: <span class="font-bold ${isOnline ? 'text-slate-100' : 'text-slate-500'}">${src.enabled ? (isOnline ? src.realData.current.temp.toFixed(1) + '°C' : '請求受限') : '已關閉'}</span>
+                                    ${isOnline ? `<span class="ml-2 text-[10px] text-blue-400 font-semibold">(佔融合比 ${effectivePercent}%)</span>` : ''}
+                                </div>
+                            </div>
+                            <button onclick="toggleSource('${key}')" class="text-xs px-3 py-1.5 rounded-xl font-bold transition active:scale-95 ${src.enabled ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}">
+                                ${src.enabled ? '已開啟' : '已關閉'}
+                            </button>
+                        </div>
+
+                        <div class="pt-2 border-t border-slate-800/80 flex items-center gap-3 ${src.enabled ? '' : 'pointer-events-none opacity-40'}">
+                            <span class="text-[10px] text-slate-400 font-medium whitespace-nowrap">權重比例</span>
+                            <input type="range" min="0" max="100" step="5" value="${src.weight}" oninput="updateWeight('${key}', this.value)" class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer">
+                            <span class="text-xs font-bold text-slate-200 min-w-[36px] text-right" id="weightVal-${key}">${src.weight}%</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function fetchAllRealData() {
+            const refreshIcon = document.getElementById('refreshIcon');
+            refreshIcon?.classList.add('fa-spin');
+
+            document.getElementById('currentLocationText').textContent = `${currentCounty} ${currentDistrict.name}`;
+            document.getElementById('locationCoordsText').textContent = `Lat: ${currentDistrict.lat.toFixed(2)}, Lon: ${currentDistrict.lon.toFixed(2)}`;
+
+            const lat = currentDistrict.lat;
+            const lon = currentDistrict.lon;
+
+            const results = await Promise.allSettled([
+                fetchCWA(currentCounty),
+                fetchOpenMeteo(lat, lon),
+                fetchWeatherAPI(lat, lon),
+                fetchOWM(lat, lon),
+                fetchTomorrow(lat, lon)
+            ]);
+
+            const keys = ['cwa', 'openmeteo', 'weatherapi', 'owm', 'tomorrow'];
+            results.forEach((res, idx) => {
+                const key = keys[idx];
+                if (res.status === 'fulfilled' && res.value) {
+                    DATA_SOURCES[key].realData = res.value;
+                } else {
+                    DATA_SOURCES[key].realData = null;
+                }
+            });
+
+            renderSourceCards();
+            fuseAndRenderData();
+
+            refreshIcon?.classList.remove('fa-spin');
+            document.getElementById('lastUpdatedTime').textContent = `${new Date().toLocaleTimeString('zh-TW', {hour: '2-digit', minute:'2-digit'})} 更新`;
+        }
+
+        async function fetchCWA(county) {
+            const url = `https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=${API_KEYS.cwa}&locationName=${encodeURIComponent(county)}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("CWA Error");
+            const data = await res.json();
+            const locData = data?.records?.location?.[0];
+            if (!locData) throw new Error("No CWA Data");
+            const elements = locData.weatherElement || [];
+            const pop = parseFloat(elements.find(e => e.elementName === 'PoP')?.time?.[0]?.parameter?.parameterName || 0);
+            const minT = parseFloat(elements.find(e => e.elementName === 'MinT')?.time?.[0]?.parameter?.parameterName || 20);
+            const maxT = parseFloat(elements.find(e => e.elementName === 'MaxT')?.time?.[0]?.parameter?.parameterName || 25);
+            return { current: { temp: (minT + maxT) / 2, rh: 75, qpf: 0, wind: 10, pop: pop } };
+        }
+
+        async function fetchOpenMeteo(lat, lon) {
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&hourly=temperature_2m,precipitation_probability,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum&timezone=Asia%2FTaipei`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("OpenMeteo Error");
+            const data = await res.json();
+            
+            const nowHour = new Date().getHours();
+            const hourly24 = [];
+            for(let i = 0; i < 24; i++) {
+                const idx = nowHour + i;
+                const timeStr = data.hourly.time[idx] ? data.hourly.time[idx].split('T')[1] : `${((nowHour+i)%24).toString().padStart(2,'0')}:00`;
+                hourly24.push({
+                    time: timeStr,
+                    temp: data.hourly.temperature_2m[idx] || data.current.temperature_2m,
+                    pop: data.hourly.precipitation_probability[idx] || 0
+                });
+            }
+
+            return {
+                current: { temp: data.current.temperature_2m, rh: data.current.relative_humidity_2m, qpf: data.current.precipitation, wind: data.current.wind_speed_10m, pop: data.hourly.precipitation_probability[0] || 0 },
+                hourly: hourly24,
+                daily: data.daily.time.slice(0, 7).map((t, i) => ({ date: t, maxTemp: data.daily.temperature_2m_max[i], minTemp: data.daily.temperature_2m_min[i], pop: data.daily.precipitation_probability_max[i] }))
+            };
+        }
+
+        async function fetchWeatherAPI(lat, lon) {
+            const url = `https://api.weatherapi.com/v1/forecast.json?key=${API_KEYS.weatherapi}&q=${lat},${lon}&days=7&aqi=no`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("WeatherAPI Error");
+            const data = await res.json();
+            return { current: { temp: data.current.temp_c, rh: data.current.humidity, qpf: data.current.precip_mm, wind: data.current.wind_kph, pop: data.forecast.forecastday[0].day.daily_chance_of_rain } };
+        }
+
+        async function fetchOWM(lat, lon) {
+            const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${API_KEYS.owm}&units=metric`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("OWM Error");
+            const data = await res.json();
+            return { current: { temp: data.main.temp, rh: data.main.humidity, qpf: data.rain ? (data.rain['1h'] || 0) : 0, wind: (data.wind.speed * 3.6), pop: 0 } };
+        }
+
+        async function fetchTomorrow(lat, lon) {
+            const url = `https://api.tomorrow.io/v4/weather/realtime?location=${lat},${lon}&apikey=${API_KEYS.tomorrow}`;
+            const res = await fetch(url);
+            if (!res.ok) throw new Error("Tomorrow Error");
+            const data = await res.json();
+            const val = data.data.values;
+            return { current: { temp: val.temperature, rh: val.humidity, qpf: val.precipitationIntensity, wind: val.windSpeed * 3.6, pop: val.precipitationProbability || 0 } };
+        }
+
+        function fuseAndRenderData() {
+            const activeSources = Object.values(DATA_SOURCES).filter(s => s.enabled && s.realData !== null && s.weight > 0);
+
+            if (activeSources.length === 0) {
+                document.getElementById('currentTemp').textContent = "--";
+                document.getElementById('currentDesc').innerHTML = `<i class="fa-solid fa-triangle-exclamation text-amber-400"></i> 請開啟 API 與權重`;
+                document.getElementById('trustLevelBadge').textContent = "未選數據源";
+                document.getElementById('hourlyCardsContainer').innerHTML = `<p class="text-xs text-slate-500 py-4">請啟用數據源與權重以讀取預報</p>`;
+                updateRadarChart();
+                return;
+            }
+
+            let totalWeight = 0;
+            let weightedTemp = 0, weightedPop = 0, weightedQpf = 0, weightedRh = 0, weightedWind = 0;
+
+            activeSources.forEach(s => {
+                const cur = s.realData.current;
+                const w = s.weight;
+                totalWeight += w;
+
+                weightedTemp += cur.temp * w;
+                weightedPop += cur.pop * w;
+                weightedQpf += cur.qpf * w;
+                weightedRh += cur.rh * w;
+                weightedWind += cur.wind * w;
+            });
+
+            const avgTemp = weightedTemp / totalWeight;
+            const avgPop = weightedPop / totalWeight;
+            const avgQpf = weightedQpf / totalWeight;
+            const avgRh = weightedRh / totalWeight;
+            const avgWind = weightedWind / totalWeight;
+
+            document.getElementById('currentTemp').textContent = avgTemp.toFixed(1);
+            document.getElementById('currentPop').textContent = `${Math.round(avgPop)} %`;
+            document.getElementById('currentQpf').textContent = `${avgQpf.toFixed(1)} mm/h`;
+            document.getElementById('currentHumidity').textContent = `${Math.round(avgRh)} %`;
+            document.getElementById('currentWind').textContent = `${avgWind.toFixed(1)} km/h`;
+
+            const descElem = document.getElementById('currentDesc');
+            if (avgPop > 50 || avgQpf > 1) {
+                descElem.innerHTML = `<i class="fa-solid fa-cloud-showers-heavy text-blue-400"></i> 陣雨預警`;
+            } else if (avgPop > 20) {
+                descElem.innerHTML = `<i class="fa-solid fa-cloud-sun text-cyan-300"></i> 多雲有雨`;
+            } else {
+                descElem.innerHTML = `<i class="fa-solid fa-sun text-amber-400"></i> 晴朗舒適`;
+            }
+
+            document.getElementById('trustLevelBadge').className = "inline-flex items-center gap-1 text-[10px] font-semibold px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30";
+            document.getElementById('trustLevelBadge').textContent = `${activeSources.length} 源加權融合`;
+
+            const om = DATA_SOURCES.openmeteo.realData;
+            if (om && om.hourly) {
+                const baseTemp = om.current.temp;
+                const tempOffset = avgTemp - baseTemp;
+
+                const calibratedHourly = om.hourly.map(h => ({
+                    time: h.time,
+                    temp: parseFloat((h.temp + tempOffset).toFixed(1)),
+                    pop: Math.min(100, Math.max(0, Math.round(h.pop + (avgPop - om.current.pop))))
+                }));
+
+                renderHourlyCards(calibratedHourly);
+                renderDailyCards(om.daily);
+            }
+
+            updateRadarChart();
+        }
+
+        function initCharts() {
+            const ctxRadar = document.getElementById('radarChart')?.getContext('2d');
+            if (ctxRadar) {
+                radarChartInstance = new Chart(ctxRadar, {
+                    type: 'bar',
+                    data: {
+                        labels: ['CWA', 'OpenMeteo', 'WeatherAPI', 'OWM', 'Tomorrow'],
+                        datasets: [{ label: '實測溫 (°C)', data: [0, 0, 0, 0, 0], backgroundColor: ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ec4899'] }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        scales: { y: { ticks: { color: '#94a3b8', font: { size: 10 } }, beginAtZero: false } }
+                    }
+                });
+            }
+        }
+
+        function renderHourlyCards(hourlyList) {
+            const container = document.getElementById('hourlyCardsContainer');
+            if (!container) return;
+
+            container.innerHTML = hourlyList.map((item, idx) => {
+                const isRain = item.pop >= 30;
+                const iconClass = isRain ? 'fa-cloud-showers-heavy text-blue-400' : (item.pop > 10 ? 'fa-cloud-sun text-amber-300' : 'fa-sun text-amber-400');
+                const timeLabel = idx === 0 ? '現在' : item.time;
+
+                return `
+                    <div class="flex-shrink-0 w-24 card-bg rounded-2xl p-2.5 text-center flex flex-col justify-between items-center border border-slate-800">
+                        <span class="text-[11px] text-slate-400 font-medium">${timeLabel}</span>
+                        <div class="my-2 text-lg">
+                            <i class="fa-solid ${iconClass}"></i>
+                        </div>
+                        <div class="text-xs font-bold text-slate-100">
+                            ${item.temp}°
+                        </div>
+                        <div class="mt-1.5 text-[10px] text-blue-400 font-medium flex items-center justify-center gap-0.5">
+                            <i class="fa-solid fa-umbrella text-[9px]"></i>
+                            <span>${item.pop}%</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderDailyCards(daily) {
+            const container = document.getElementById('dailyCardsContainer');
+            if (!container) return;
+
+            container.innerHTML = daily.map(d => `
+                <div class="card-bg p-3 rounded-2xl text-center flex flex-col justify-between items-center border border-slate-800">
+                    <div>
+                        <p class="text-[11px] text-slate-400 font-medium">${d.date.split('-').slice(1).join('/')}</p>
+                        <div class="my-1.5">
+                            <i class="fa-solid ${d.pop > 40 ? 'fa-cloud-showers-heavy text-blue-400' : 'fa-sun text-amber-400'} text-lg"></i>
+                        </div>
+                    </div>
+                    <div>
+                        <p class="text-xs font-bold text-slate-100">${d.maxTemp}° <span class="text-slate-400 font-normal">/ ${d.minTemp}°</span></p>
+                        <p class="text-[10px] text-blue-400 mt-1 flex items-center justify-center gap-0.5">
+                            <i class="fa-solid fa-umbrella text-[9px]"></i> ${d.pop}%
+                        </p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateRadarChart() {
+            if (!radarChartInstance) return;
+            const keys = ['cwa', 'openmeteo', 'weatherapi', 'owm', 'tomorrow'];
+            const temps = keys.map(k => (DATA_SOURCES[k].enabled && DATA_SOURCES[k].realData) ? DATA_SOURCES[k].realData.current.temp : 0);
+
+            const validTemps = temps.filter(t => t > 0);
+            const spread = validTemps.length > 1 ? (Math.max(...validTemps) - Math.min(...validTemps)).toFixed(1) : "0.0";
+            document.getElementById('tempSpread').textContent = `${spread} °C`;
+
+            radarChartInstance.data.datasets[0].data = temps;
+            radarChartInstance.update();
+        }
+    </script>
+</body>
+</html>

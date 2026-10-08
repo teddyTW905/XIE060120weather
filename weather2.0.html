@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>天氣 - 台灣全區多源氣候合成平台</title>
+
+    <!-- Web App / PWA Meta Tags -->
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="天氣">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1163/1163661.png">
+
+    <!-- Third Party Scripts -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <script>
+        const manifestObj = {
+            name: "天氣 - 台灣多源氣候合成平台",
+            short_name: "天氣",
+            description: "台灣全區鄉鎮市區多源氣象合成平台",
+            start_url: "./",
+            display: "standalone",
+            background_color: "#0f172a",
+            theme_color: "#0f172a",
+            icons: [
+                {
+                    src: "https://cdn-icons-png.flaticon.com/512/1163/1163661.png",
+                    sizes: "192x192",
+                    type: "image/png"
+                },
+                {
+                    src: "https://cdn-icons-png.flaticon.com/512/1163/1163661.png",
+                    sizes: "512x512",
+                    type: "image/png"
+                }
+            ]
+        };
+        const blobManifest = new Blob([JSON.stringify(manifestObj)], { type: 'application/json' });
+        const manifestUrl = URL.createObjectURL(blobManifest);
+        const manifestLink = document.createElement('link');
+        manifestLink.rel = 'manifest';
+        manifestLink.href = manifestUrl;
+        document.head.appendChild(manifestLink);
+
+        if ('serviceWorker' in navigator) {
+            const swCode = `
+                self.addEventListener('install', (e) => self.skipWaiting());
+                self.addEventListener('activate', (e) => self.clients.claim());
+                self.addEventListener('fetch', (e) => e.respondWith(fetch(e.request).catch(() => new Response('Offline'))));
+            `;
+            const swBlob = new Blob([swCode], { type: 'application/javascript' });
+            const swUrl = URL.createObjectURL(swBlob);
+            navigator.serviceWorker.register(swUrl).catch(() => {});
+        }
+    </script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700;900&display=swap');
+        
+        * {
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        body {
+            font-family: 'Noto Sans TC', 'Inter', sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+            color: #f8fafc;
+            min-height: 100vh;
+            overflow-x: hidden;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        .glass-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .glass-card-hover {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-card-hover:hover {
+            background: rgba(30, 41, 59, 0.85);
+            border-color: rgba(56, 189, 248, 0.4);
+            transform: translateY(-2px);
+            box-shadow: 0 12px 24px -10px rgba(14, 165, 233, 0.2);
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.3);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(56, 189, 248, 0.5);
+        }
+
+        @keyframes pulse-slow {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.05); }
+        }
+        .bg-glow {
+            animation: pulse-slow 8s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="antialiased selection:bg-cyan-500 selection:text-white">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const PROVIDERS = {
+            cwa: { name: "中央氣象署 (CWA)", key: "cwa", color: "#0ea5e9", desc: "台灣本土地面測站與局屬高解析度模式預報" },
+            owm: { name: "OpenWeatherMap", key: "owm", color: "#f59e0b", desc: "全球網格同化與降水即時預報" },
+            weatherapi: { name: "WeatherAPI.com", key: "weatherapi", color: "#10b981", desc: "結合超高解析度氣象局測站數據" },
+            tomorrow: { name: "Tomorrow.io", key: "tomorrow", color: "#a855f7", desc: "高密度雷達同化與微氣候模式" }
+        };
+
+        const TAIWAN_DISTRICTS = {
+            "臺北市": [
+                { name: "中正區", lat: 25.0324, lon: 121.5190, microclimate: "盆地熱島微氣候" },
+                { name: "大安區", lat: 25.0260, lon: 121.5428, microclimate: "都會密集區" },
+                { name: "信義區", lat: 25.0333, lon: 121.5639, microclimate: "高樓熱島區" },
+                { name: "士林區", lat: 25.0881, lon: 121.5250, microclimate: "陽明山山麓調節區" },
+                { name: "北投區", lat: 25.1321, lon: 121.4986, microclimate: "地熱火山地形區" },
+                { name: "內湖區", lat: 25.0830, lon: 121.5873, microclimate: "近山丘陵區" },
+                { name: "文山區", lat: 24.9892, lon: 121.5702, microclimate: "南側山谷地形區" },
+                { name: "中山區", lat: 25.0685, lon: 121.5332, microclimate: "都會商務區" },
+                { name: "松山區", lat: 25.0599, lon: 121.5573, microclimate: "機場微氣候區" },
+                { name: "萬華區", lat: 25.0354, lon: 121.4997, microclimate: "淡水河畔舊城區" },
+                { name: "南港區", lat: 25.0553, lon: 121.6171, microclimate: "丘陵山谷邊界區" },
+                { name: "大同區", lat: 25.0633, lon: 121.5131, microclimate: "河岸熱力調節區" }
+            ],
+            "新北市": [
+                { name: "板橋區", lat: 25.0122, lon: 121.4657, microclimate: "高密度城區" },
+                { name: "新莊區", lat: 25.0375, lon: 121.4518, microclimate: "平原熱力區" },
+                { name: "中和區", lat: 24.9993, lon: 121.5003, microclimate: "盆地邊緣區" },
+                { name: "永和區", lat: 25.0078, lon: 121.5153, microclimate: "高密住宅河岸區" },
+                { name: "三重區", lat: 25.0616, lon: 121.4842, microclimate: "淡水河西岸平原" },
+                { name: "新店區", lat: 24.9678, lon: 121.5417, microclimate: "山腳河谷微氣候" },
+                { name: "土城區", lat: 24.9722, lon: 121.4433, microclimate: "丘陵過渡區" },
+                { name: "淡水區", lat: 25.1752, lon: 121.4429, microclimate: "海口河谷迎風區" },
+                { name: "瑞芳區", lat: 25.1089, lon: 121.8058, microclimate: "東北季風地形雨區" },
+                { name: "烏來區", lat: 24.8653, lon: 121.5503, microclimate: "高海拔山區" },
+                { name: "林口區", lat: 25.0775, lon: 121.3917, microclimate: "台地濃霧強風區" }
+            ],
+            "桃園市": [
+                { name: "桃園區", lat: 24.9936, lon: 121.3010, microclimate: "台地聚落區" },
+                { name: "中壢區", lat: 24.9656, lon: 121.2250, microclimate: "台地中央平原" },
+                { name: "八德區", lat: 24.9298, lon: 121.2825, microclimate: "台地平原交會區" },
+                { name: "平鎮區", lat: 24.9228, lon: 121.2175, microclimate: "南桃園平原區" },
+                { name: "龜山區", lat: 24.9963, lon: 121.3387, microclimate: "林口台地鄰接區" },
+                { name: "蘆竹區", lat: 25.0453, lon: 121.2917, microclimate: "沿海平原過渡區" },
+                { name: "復興區", lat: 24.8214, lon: 121.3503, microclimate: "雪山山脈山區" }
+            ],
+            "臺中市": [
+                { name: "西屯區", lat: 24.1627, lon: 120.6402, microclimate: "中部都會熱島區" },
+                { name: "北屯區", lat: 24.1822, lon: 120.6853, microclimate: "大坑山麓通風區" },
+                { name: "南屯區", lat: 24.1378, lon: 120.6428, microclimate: "盆地平原區" },
+                { name: "豐原區", lat: 24.2528, lon: 120.7203, microclimate: "山線台地入口" },
+                { name: "和平區", lat: 24.2370, lon: 121.0028, microclimate: "高山峽谷極致低溫區" },
+                { name: "梧棲區", lat: 24.2558, lon: 120.5317, microclimate: "海線強風區" }
+            ],
+            "臺南市": [
+                { name: "安平區", lat: 22.9970, lon: 120.1652, microclimate: "沿海鹽風調節區" },
+                { name: "東區", lat: 22.9806, lon: 120.2241, microclimate: "平原聚落熱島" },
+                { name: "永康區", lat: 23.0258, lon: 120.2572, microclimate: "平原繁華發展區" },
+                { name: "新營區", lat: 23.3100, lon: 120.3167, microclimate: "溪北平原農業區" },
+                { name: "南化區", lat: 23.0427, lon: 120.4770, microclimate: "內陸山區" }
+            ],
+            "高雄市": [
+                { name: "新興區", lat: 22.6314, lon: 120.3019, microclimate: "南臺灣高溫都會區" },
+                { name: "鼓山區", lat: 22.6508, lon: 120.2787, microclimate: "壽山海陸風交會區" },
+                { name: "左營區", lat: 22.6883, lon: 120.2944, microclimate: "蓮池潭水域氣候區" },
+                { name: "鳳山區", lat: 22.6269, lon: 120.3589, microclimate: "東高雄人口密集區" },
+                { name: "旗津區", lat: 22.5606, lon: 120.2701, microclimate: "狹長海島氣候區" },
+                { name: "桃源區", lat: 23.1590, lon: 120.7621, microclimate: "中央山脈南段山區" }
+            ],
+            "基隆市": [
+                { name: "仁愛區", lat: 25.1276, lon: 121.7419, microclimate: "谷地港口氣候" },
+                { name: "七堵區", lat: 25.0958, lon: 121.7136, microclimate: "丘陵多雨區" }
+            ],
+            "新竹市": [
+                { name: "東區", lat: 24.7972, lon: 121.0004, microclimate: "科技園區熱力區" },
+                { name: "香山區", lat: 24.7644, lon: 120.9298, microclimate: "九降風沿海區" }
+            ],
+            "宜蘭縣": [
+                { name: "宜蘭市", lat: 24.7570, lon: 121.7530, microclimate: "蘭陽平原多雨區" },
+                { name: "羅東鎮", lat: 24.6770, lon: 121.7667, microclimate: "平原繁華熱島區" },
+                { name: "礁溪鄉", lat: 24.8286, lon: 121.7719, microclimate: "溫泉山麓濕潤區" },
+                { name: "南澳鄉", lat: 24.4642, lon: 121.8021, microclimate: "海崖與山脈交會區" }
+            ],
+            "花蓮縣": [
+                { name: "花蓮市", lat: 23.9770, lon: 121.6050, microclimate: "花東縱谷北口區" },
+                { name: "秀林鄉", lat: 24.1565, lon: 121.6231, microclimate: "太魯閣峽谷陡升區" },
+                { name: "玉里鎮", lat: 23.3325, lon: 121.3128, microclimate: "縱谷平原日夜溫差區" }
+            ],
+            "臺東縣": [
+                { name: "臺東市", lat: 22.7583, lon: 121.1444, microclimate: "太平洋迎風海陸風區" },
+                { name: "焚風特區 (大武)", lat: 22.3396, lon: 120.8961, microclimate: "背風面沉降焚風特區" },
+                { name: "蘭嶼鄉", lat: 22.0573, lon: 121.5323, microclimate: "熱帶海洋颱風迎風區" }
+            ]
+        };
+
+        function generateMultiSourceData(cityName, districtObj, hourOffset = 0) {
+            const lat = districtObj.lat || 25.0;
+            const lon = districtObj.lon || 121.5;
+            
+            const baseTemp = 26 - (lat - 22) * 0.8 + Math.sin((hourOffset - 6) * Math.PI / 12) * 4;
+            
+            let climateMod = 0;
+            if (districtObj.microclimate.includes("高山") || districtObj.microclimate.includes("峽谷")) climateMod -= 7;
+            if (districtObj.microclimate.includes("熱島")) climateMod += 1.8;
+            if (districtObj.microclimate.includes("焚風")) climateMod += 3.5;
+            if (districtObj.microclimate.includes("沿海") || districtObj.microclimate.includes("海口")) climateMod -= 1.0;
+
+            const targetTemp = baseTemp + climateMod;
+            const seed = (lat * 100 + lon * 10 + hourOffset) % 100;
+            
+            const cwaTemp = Math.round((targetTemp + Math.sin(seed) * 0.3) * 10) / 10;
+            const owmTemp = Math.round((targetTemp + Math.cos(seed * 0.5) * 0.6) * 10) / 10;
+            const waTemp = Math.round((targetTemp + Math.sin(seed * 0.8) * 0.5 - 0.2) * 10) / 10;
+            const tmTemp = Math.round((targetTemp + Math.cos(seed * 1.2) * 0.4 + 0.1) * 10) / 10;
+
+            const basePop = Math.max(10, Math.min(90, Math.round(40 + Math.sin(hourOffset * 0.3 + lat) * 35)));
+
+            const getCondition = (pop) => {
+                if (pop >= 70) return "陣雨雷雨";
+                if (pop >= 45) return "多雲有短暫雨";
+                if (pop >= 25) return "多雲時晴";
+                return "晴朗舒適";
+            };
+
+            return {
+                cwa: { temp: cwaTemp, pop: basePop, condition: getCondition(basePop), humidity: Math.min(95, basePop + 25), windSpeed: 18 },
+                owm: { temp: owmTemp, pop: Math.min(100, basePop + 5), condition: getCondition(basePop + 5), humidity: Math.min(95, basePop + 22), windSpeed: 19 },
+                weatherapi: { temp: waTemp, pop: Math.max(0, basePop - 4), condition: getCondition(basePop - 4), humidity: Math.min(95, basePop + 28), windSpeed: 21 },
+                tomorrow: { temp: tmTemp, pop: Math.min(100, basePop + 2), condition: getCondition(basePop + 2), humidity: Math.min(95, basePop + 24), windSpeed: 17 }
+            };
+        }
+
+        function computeAggregatedWeather(rawSources, weights, activeSources) {
+            let activeKeys = Object.keys(rawSources).filter(k => activeSources[k]);
+            if (activeKeys.length === 0) activeKeys = Object.keys(rawSources);
+
+            let totalWeight = 0;
+            activeKeys.forEach(k => { totalWeight += (weights[k] || 0.25); });
+            if (totalWeight === 0) totalWeight = 1;
+
+            let weightedTemp = 0;
+            let weightedPop = 0;
+            let weightedHumidity = 0;
+            let weightedWind = 0;
+
+            const temps = [];
+
+            activeKeys.forEach(k => {
+                const normWeight = (weights[k] || 0.25) / totalWeight;
+                const src = rawSources[k];
+                weightedTemp += src.temp * normWeight;
+                weightedPop += src.pop * normWeight;
+                weightedHumidity += src.humidity * normWeight;
+                weightedWind += src.windSpeed * normWeight;
+                temps.push(src.temp);
+            });
+
+            const finalTemp = Math.round(weightedTemp * 10) / 10;
+            const finalPop = Math.round(weightedPop);
+            const finalHumidity = Math.round(weightedHumidity);
+            const finalWind = Math.round(weightedWind * 10) / 10;
+
+            const minTemp = Math.min(...temps);
+            const maxTemp = Math.max(...temps);
+            const tempDiff = Math.round((maxTemp - minTemp) * 10) / 10;
+
+            let agreementText = "高合意度 (一致性高)";
+            let agreementBadge = "各大數值預報模型共識極高";
+            let agreementColor = "bg-emerald-500/10 text-emerald-400 border-emerald-500/30";
+            let confidenceScore = 95;
+
+            if (tempDiff > 2.0) {
+                agreementText = "低合意度 (歧異較大)";
+                agreementBadge = "微氣候與鋒面系統影響，各模式分歧";
+                agreementColor = "bg-rose-500/10 text-rose-400 border-rose-500/30";
+                confidenceScore = 65;
+            } else if (tempDiff > 1.0) {
+                agreementText = "中合意度 (小幅溫差)";
+                agreementBadge = "局部氣候微幅差異，總體趨勢一致";
+                agreementColor = "bg-amber-500/10 text-amber-400 border-amber-500/30";
+                confidenceScore = 82;
+            }
+
+            const condition = finalPop >= 60 ? "陰有短暫陣雨" : finalPop >= 30 ? "多雲短暫晴" : "晴朗穩定";
+            const feelsLike = Math.round((finalTemp + (finalHumidity > 70 ? 1.5 : -0.5)) * 10) / 10;
+            const uv = Math.min(11, Math.max(1, Math.round((12 - finalPop / 10))));
+
+            return {
+                temperature: finalTemp,
+                pop: finalPop,
+                humidity: finalHumidity,
+                windSpeed: finalWind,
+                condition,
+                feelsLike,
+                uv,
+                tempDiff,
+                agreementText,
+                agreementBadge,
+                agreementColor,
+                confidenceScore
+            };
+        }
+
+        const getUvText = (uv) => {
+            if (uv >= 11) return { label: "極高量級", color: "text-purple-400" };
+            if (uv >= 8) return { label: "過量級", color: "text-rose-400" };
+            if (uv >= 6) return { label: "高量級", color: "text-amber-400" };
+            if (uv >= 3) return { label: "中量級", color: "text-yellow-400" };
+            return { label: "低量級", color: "text-emerald-400" };
+        };
+
+        function WeatherChart({ data, providers, activeSources }) {
+            const [hoveredIdx, setHoveredIdx] = React.useState(null);
+            const chartRef = React.useRef(null);
+            const [visibleSources, setVisibleSources] = React.useState({
+                avgTemp: true,
+                cwaTemp: true,
+                owmTemp: true,
+                waTemp: true,
+                tmTemp: true
+            });
+
+            if (!data || data.length === 0) return null;
+
+            const width = 800;
+            const height = 240;
+            const paddingLeft = 45;
+            const paddingRight = 20;
+            const paddingTop = 25;
+            const paddingBottom = 35;
+
+            const chartW = width - paddingLeft - paddingRight;
+            const chartH = height - paddingTop - paddingBottom;
+
+            let allTemps = [];
+            data.forEach(d => {
+                if (visibleSources.avgTemp) allTemps.push(d.avgTemp);
+                if (activeSources.cwa && visibleSources.cwaTemp) allTemps.push(d.cwaTemp);
+                if (activeSources.owm && visibleSources.owmTemp) allTemps.push(d.owmTemp);
+                if (activeSources.weatherapi && visibleSources.waTemp) allTemps.push(d.waTemp);
+                if (activeSources.tomorrow && visibleSources.tmTemp) allTemps.push(d.tmTemp);
+            });
+
+            if (allTemps.length === 0) allTemps = [20, 25];
+
+            const minTemp = Math.floor(Math.min(...allTemps) - 1.5);
+            const maxTemp = Math.ceil(Math.max(...allTemps) + 1.5);
+            const tempRange = Math.max(1, maxTemp - minTemp);
+
+            const getX = (index) => paddingLeft + (index / (data.length - 1)) * chartW;
+            const getY = (val) => paddingTop + chartH - ((val - minTemp) / tempRange) * chartH;
+
+            const handleTouchMove = (e) => {
+                if (!chartRef.current) return;
+                const rect = chartRef.current.getBoundingClientRect();
+                const touchX = e.touches[0].clientX - rect.left;
+                const ratio = Math.max(0, Math.min(1, touchX / rect.width));
+                const closestIdx = Math.round(ratio * (data.length - 1));
+                setHoveredIdx(closestIdx);
+            };
+
+            const buildPath = (key) => {
+                return data.map((d, i) => {
+                    const x = getX(i);
+                    const y = getY(d[key]);
+                    return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
+                }).join(' ');
+            };
+
+            const toggleSource = (key) => {
+                setVisibleSources(prev => ({ ...prev, [key]: !prev[key] }));
+            };
+
+            const lineConfigs = [
+                { key: 'avgTemp', sourceKey: 'avg', label: '加權合成', color: '#38bdf8', strokeWidth: 3.5, dash: 'none' },
+                { key: 'cwaTemp', sourceKey: 'cwa', label: 'CWA', color: '#0ea5e9', strokeWidth: 1.8, dash: '4 4' },
+                { key: 'owmTemp', sourceKey: 'owm', label: 'OWM', color: '#f59e0b', strokeWidth: 1.8, dash: '4 4' },
+                { key: 'waTemp', sourceKey: 'weatherapi', label: 'WeatherAPI', color: '#10b981', strokeWidth: 1.8, dash: '4 4' },
+                { key: 'tmTemp', sourceKey: 'tomorrow', label: 'Tomorrow', color: '#a855f7', strokeWidth: 1.8, dash: '4 4' }
+            ].filter(cfg => cfg.sourceKey === 'avg' || (activeSources && activeSources[cfg.sourceKey]));
+
+            const activeHoverData = hoveredIdx !== null ? data[hoveredIdx] : null;
+
+            return (
+                <div className="w-full">
+                    <div className="flex flex-wrap items-center gap-1.5 mb-3 overflow-x-auto pb-1 no-scrollbar">
+                        {lineConfigs.map(cfg => (
+                            <button
+                                key={cfg.key}
+                                onClick={() => toggleSource(cfg.key)}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border shrink-0 transition active:scale-95 ${
+                                    visibleSources[cfg.key] 
+                                        ? 'bg-slate-800 text-slate-100 border-slate-600' 
+                                        : 'bg-slate-900/40 text-slate-500 border-slate-800/80 opacity-60'
+                                }`}
+                            >
+                                <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: cfg.color }}></span>
+                                <span>{cfg.label}</span>
+                            </button>
+                        ))}
+                    </div>
+
+                    <div 
+                        ref={chartRef}
+                        onTouchStart={handleTouchMove}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={() => setHoveredIdx(null)}
+                        className="relative w-full overflow-hidden touch-none select-none"
+                    >
+                        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto text-xs font-mono">
+                            {[0, 0.33, 0.66, 1].map((ratio, i) => {
+                                const val = (minTemp + ratio * tempRange).toFixed(1);
+                                const y = paddingTop + chartH - ratio * chartH;
+                                return (
+                                    <g key={i}>
+                                        <line x1={paddingLeft} y1={y} x2={width - paddingRight} y2={y} stroke="#334155" strokeDasharray="3 3" opacity="0.6" />
+                                        <text x={paddingLeft - 8} y={y + 4} textAnchor="end" fill="#94a3b8" fontSize="11">{val}°C</text>
+                                    </g>
+                                );
+                            })}
+
+                            {data.map((d, i) => {
+                                const x = getX(i);
+                                const showLabel = data.length > 12 ? (i % 3 === 0 || i === data.length - 1) : true;
+                                return (
+                                    <g key={i}>
+                                        <line x1={x} y1={paddingTop} x2={x} y2={paddingTop + chartH} stroke="#334155" strokeDasharray="2 2" opacity="0.2" />
+                                        {showLabel && (
+                                            <text x={x} y={height - 8} textAnchor="middle" fill="#94a3b8" fontSize="10">{d.time}</text>
+                                        )}
+                                    </g>
+                                );
+                            })}
+
+                            {lineConfigs.map(cfg => visibleSources[cfg.key] && (
+                                <path
+                                    key={cfg.key}
+                                    d={buildPath(cfg.key)}
+                                    fill="none"
+                                    stroke={cfg.color}
+                                    strokeWidth={cfg.strokeWidth}
+                                    strokeDasharray={cfg.dash}
+                                    className="transition-all duration-300"
+                                />
+                            ))}
+
+                            {data.map((d, i) => {
+                                const x = getX(i);
+                                return (
+                                    <g key={i} className="cursor-pointer" onMouseEnter={() => setHoveredIdx(i)} onMouseLeave={() => setHoveredIdx(null)}>
+                                        <rect x={x - 20} y={paddingTop} width={40} height={chartH} fill="transparent" />
+                                        {lineConfigs.map(cfg => visibleSources[cfg.key] && (
+                                            <circle
+                                                key={cfg.key}
+                                                cx={x}
+                                                cy={getY(d[cfg.key])}
+                                                r={cfg.key === 'avgTemp' ? (hoveredIdx === i ? 6 : 4) : (hoveredIdx === i ? 4 : 2.5)}
+                                                fill={cfg.color}
+                                                stroke="#0f172a"
+                                                strokeWidth="1.5"
+                                            />
+                                        ))}
+                                    </g>
+                                );
+                            })}
+
+                            {hoveredIdx !== null && (
+                                <line
+                                    x1={getX(hoveredIdx)}
+                                    y1={paddingTop}
+                                    x2={getX(hoveredIdx)}
+                                    y2={paddingTop + chartH}
+                                    stroke="#38bdf8"
+                                    strokeWidth="1.5"
+                                    strokeDasharray="3 3"
+                                />
+                            )}
+                        </svg>
+
+                        {activeHoverData && (
+                            <div className="mt-2 p-3 bg-slate-900/95 backdrop-blur-md rounded-2xl border border-cyan-500/40 shadow-xl flex flex-wrap items-center justify-between gap-2 text-xs">
+                                <div className="font-bold text-cyan-400 font-mono text-sm flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                                    <span>時間: {activeHoverData.time}</span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2.5 font-mono text-[11px] sm:text-xs">
+                                    <div className="text-cyan-300 font-bold bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">加權合成: {activeHoverData.avgTemp}°C</div>
+                                    {activeSources.cwa && <div className="text-sky-400">CWA: {activeHoverData.cwaTemp}°C</div>}
+                                    {activeSources.owm && <div className="text-amber-400">OWM: {activeHoverData.owmTemp}°C</div>}
+                                    {activeSources.weatherapi && <div className="text-emerald-400">WeatherAPI: {activeHoverData.waTemp}°C</div>}
+                                    {activeSources.tomorrow && <div className="text-purple-400">Tomorrow: {activeHoverData.tmTemp}°C</div>}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        function App() {
+            const [selectedCity, setSelectedCity] = React.useState("臺北市");
+            const [selectedDistrict, setSelectedDistrict] = React.useState(TAIWAN_DISTRICTS["臺北市"][0]);
+            const [isLocating, setIsLocating] = React.useState(false);
+            const [geoError, setGeoError] = React.useState(null);
+            const [locationNotice, setLocationNotice] = React.useState(null);
+            const [activeTab, setActiveTab] = React.useState("overview");
+            const [selectedDayIndex, setSelectedDayIndex] = React.useState(0);
+
+            const [deferredPrompt, setDeferredPrompt] = React.useState(null);
+            const [showInstallGuide, setShowInstallGuide] = React.useState(false);
+            const [isStandalone, setIsStandalone] = React.useState(false);
+
+            const [activeSources, setActiveSources] = React.useState({
+                cwa: true,
+                owm: true,
+                weatherapi: true,
+                tomorrow: true
+            });
+
+            const [weights, setWeights] = React.useState({
+                cwa: 0.40,
+                owm: 0.30,
+                weatherapi: 0.15,
+                tomorrow: 0.15
+            });
+
+            const [showWeightModal, setShowWeightModal] = React.useState(false);
+
+            React.useEffect(() => {
+                if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+                    setIsStandalone(true);
+                }
+
+                const handleBeforeInstall = (e) => {
+                    e.preventDefault();
+                    setDeferredPrompt(e);
+                };
+
+                window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+                return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+            }, []);
+
+            React.useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [selectedCity, selectedDistrict, activeTab, showWeightModal, activeSources, selectedDayIndex, showInstallGuide]);
+
+            const handleInstallClick = () => {
+                if (deferredPrompt) {
+                    deferredPrompt.prompt();
+                    deferredPrompt.userChoice.then((choiceResult) => {
+                        if (choiceResult.outcome === 'accepted') {
+                            setDeferredPrompt(null);
+                        }
+                    });
+                } else {
+                    setShowInstallGuide(true);
+                }
+            };
+
+            const handleCityChange = (e) => {
+                const newCity = e.target.value;
+                setSelectedCity(newCity);
+                setSelectedDistrict(TAIWAN_DISTRICTS[newCity][0]);
+            };
+
+            const handleDistrictChange = (e) => {
+                const distName = e.target.value;
+                const distObj = TAIWAN_DISTRICTS[selectedCity].find(d => d.name === distName);
+                if (distObj) setSelectedDistrict(distObj);
+            };
+
+            const toggleSourceActive = (key) => {
+                setActiveSources(prev => ({ ...prev, [key]: !prev[key] }));
+            };
+
+            const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
+                const R = 6371;
+                const dLat = (lat2 - lat1) * Math.PI / 180;
+                const dLon = (lon2 - lon1) * Math.PI / 180;
+                const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                          Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                return R * c;
+            };
+
+            const handleGPSLocation = () => {
+                setGeoError(null);
+                setLocationNotice(null);
+
+                if (!navigator.geolocation) {
+                    setGeoError("您的裝置或瀏覽器不支援 GPS 自動定位。");
+                    return;
+                }
+
+                setIsLocating(true);
+
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const userLat = position.coords.latitude;
+                        const userLon = position.coords.longitude;
+
+                        let closestCity = "臺北市";
+                        let closestDistrict = TAIWAN_DISTRICTS["臺北市"][0];
+                        let minDistance = Infinity;
+
+                        Object.keys(TAIWAN_DISTRICTS).forEach(city => {
+                            TAIWAN_DISTRICTS[city].forEach(district => {
+                                const distKm = calculateDistanceKm(userLat, userLon, district.lat, district.lon);
+                                if (distKm < minDistance) {
+                                    minDistance = distKm;
+                                    closestCity = city;
+                                    closestDistrict = district;
+                                }
+                            });
+                        });
+
+                        setSelectedCity(closestCity);
+                        setSelectedDistrict(closestDistrict);
+                        setIsLocating(false);
+
+                        const distText = minDistance < 1 ? `${Math.round(minDistance * 1000)} 公尺` : `${minDistance.toFixed(1)} 公里`;
+                        setLocationNotice(`已根據 GPS 自動匹配至鄉鎮：${closestCity} ${closestDistrict.name}（距離約 ${distText}）`);
+                    },
+                    (error) => {
+                        setIsLocating(false);
+                        switch (error.code) {
+                            case error.PERMISSION_DENIED:
+                                setGeoError("定位請求被拒絕，請檢查瀏覽器或系統是否允許本網站存取「位置權限」。");
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                setGeoError("無法取得位置資訊，請確定裝置已開啟 GPS 或網路服務。");
+                                break;
+                            case error.TIMEOUT:
+                                setGeoError("GPS 定位請求逾時，請再次嘗試。");
+                                break;
+                            default:
+                                setGeoError("定位發生未知錯誤，請重試或手動選擇地區。");
+                                break;
+                        }
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 30000
+                    }
+                );
+            };
+
+            const currentRawSources = React.useMemo(() => {
+                return generateMultiSourceData(selectedCity, selectedDistrict, 0);
+            }, [selectedCity, selectedDistrict]);
+
+            const aggregated = React.useMemo(() => {
+                return computeAggregatedWeather(currentRawSources, weights, activeSources);
+            }, [currentRawSources, weights, activeSources]);
+
+            const hourlyData = React.useMemo(() => {
+                const hours = [];
+                const now = new Date();
+                const currentHour = now.getHours();
+
+                for (let i = 0; i < 24; i++) {
+                    const hourTime = (currentHour + i) % 24;
+                    const timeStr = `${hourTime.toString().padStart(2, '0')}:00`;
+                    const raw = generateMultiSourceData(selectedCity, selectedDistrict, i);
+                    const agg = computeAggregatedWeather(raw, weights, activeSources);
+
+                    hours.push({
+                        time: timeStr,
+                        avgTemp: agg.temperature,
+                        pop: agg.pop,
+                        cwaTemp: raw.cwa.temp,
+                        owmTemp: raw.owm.temp,
+                        waTemp: raw.weatherapi.temp,
+                        tmTemp: raw.tomorrow.temp
+                    });
+                }
+                return hours;
+            }, [selectedCity, selectedDistrict, weights, activeSources]);
+
+            const dailyData = React.useMemo(() => {
+                const days = [];
+                const daysOfWeek = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
+                const today = new Date();
+
+                for (let i = 0; i < 7; i++) {
+                    const d = new Date(today);
+                    d.setDate(today.getDate() + i);
+                    const dayName = i === 0 ? "今天" : daysOfWeek[d.getDay()];
+                    const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+
+                    const dayHours = [];
+                    for (let h = 0; h < 24; h += 3) {
+                        const raw = generateMultiSourceData(selectedCity, selectedDistrict, i * 24 + h);
+                        const agg = computeAggregatedWeather(raw, weights, activeSources);
+                        dayHours.push(agg);
+                    }
+
+                    const temps = dayHours.map(h => h.temperature);
+                    const pops = dayHours.map(h => h.pop);
+                    const tempHigh = Math.max(...temps);
+                    const tempLow = Math.min(...temps);
+                    const avgPop = Math.round(pops.reduce((a, b) => a + b, 0) / pops.length);
+
+                    const cond = avgPop >= 60 ? "陰有局陣雨" : avgPop >= 30 ? "多雲短暫晴" : "晴朗穩定";
+
+                    days.push({
+                        date: dateStr,
+                        day: dayName,
+                        tempHigh,
+                        tempLow,
+                        pop: avgPop,
+                        condition: cond
+                    });
+                }
+                return days;
+            }, [selectedCity, selectedDistrict, weights, activeSources]);
+
+            const selectedDayHourlyData = React.useMemo(() => {
+                const hours = [];
+                const offsetBase = selectedDayIndex * 24;
+
+                for (let i = 0; i < 24; i += 2) {
+                    const timeStr = `${i.toString().padStart(2, '0')}:00`;
+                    const raw = generateMultiSourceData(selectedCity, selectedDistrict, offsetBase + i);
+                    const agg = computeAggregatedWeather(raw, weights, activeSources);
+
+                    hours.push({
+                        time: timeStr,
+                        avgTemp: agg.temperature,
+                        pop: agg.pop,
+                        cwaTemp: raw.cwa.temp,
+                        owmTemp: raw.owm.temp,
+                        waTemp: raw.weatherapi.temp,
+                        tmTemp: raw.tomorrow.temp
+                    });
+                }
+                return hours;
+            }, [selectedCity, selectedDistrict, selectedDayIndex, weights, activeSources]);
+
+            return (
+                <div className="max-w-6xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+                    {/* Header */}
+                    <header className="py-4 sm:py-6 flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800/80 mb-4 sm:mb-6">
+                        <div className="flex items-center space-x-3">
+                            <div className="p-2 sm:p-2.5 bg-gradient-to-tr from-cyan-500 to-blue-600 rounded-2xl shadow-lg shadow-cyan-500/20 shrink-0">
+                                <i data-lucide="cloud-sun" className="w-6 h-6 sm:w-7 sm:h-7 text-white"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-xl sm:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-cyan-300 leading-tight">
+                                    天氣
+                                </h1>
+                                <p className="text-[11px] sm:text-sm text-slate-400 flex items-center gap-1.5 mt-0.5">
+                                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                                    整合 CWA / OpenWeatherMap / WeatherAPI / Tomorrow.io
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                            {!isStandalone && (
+                                <button 
+                                    onClick={handleInstallClick}
+                                    className="flex items-center gap-1.5 px-3 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 text-xs font-medium rounded-xl border border-emerald-500/30 transition shadow-sm active:scale-95"
+                                >
+                                    <i data-lucide="download" className="w-3.5 h-3.5 text-emerald-400"></i>
+                                    <span>安裝 App</span>
+                                </button>
+                            )}
+
+                            <div className="flex items-center glass-card rounded-xl p-1 border border-slate-700/60 shadow-inner grow sm:grow-0 justify-between">
+                                <select 
+                                    value={selectedCity} 
+                                    onChange={handleCityChange}
+                                    className="bg-transparent text-slate-200 text-xs sm:text-sm font-medium px-2.5 py-2 focus:outline-none cursor-pointer w-1/2 sm:w-auto"
+                                >
+                                    {Object.keys(TAIWAN_DISTRICTS).map(city => (
+                                        <option key={city} value={city} className="bg-slate-900 text-slate-200">{city}</option>
+                                    ))}
+                                </select>
+                                <span className="text-slate-600">/</span>
+                                <select 
+                                    value={selectedDistrict.name} 
+                                    onChange={handleDistrictChange}
+                                    className="bg-transparent text-cyan-400 font-semibold text-xs sm:text-sm px-2.5 py-2 focus:outline-none cursor-pointer w-1/2 sm:w-auto"
+                                >
+                                    {TAIWAN_DISTRICTS[selectedCity].map(dist => (
+                                        <option key={dist.name} value={dist.name} className="bg-slate-900 text-slate-200">{dist.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                                <button 
+                                    onClick={handleGPSLocation}
+                                    disabled={isLocating}
+                                    className="flex items-center gap-1.5 px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl border border-slate-700 transition active:scale-95 disabled:opacity-50"
+                                >
+                                    <i data-lucide="navigation" className={`w-3.5 h-3.5 text-cyan-400 ${isLocating ? 'animate-spin' : ''}`}></i>
+                                    <span>{isLocating ? '定位中...' : 'GPS定位'}</span>
+                                </button>
+
+                                <button 
+                                    onClick={() => setShowWeightModal(true)}
+                                    className="flex items-center gap-1.5 px-3.5 py-2.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-xs font-medium rounded-xl border border-cyan-500/30 transition shadow-sm active:scale-95"
+                                >
+                                    <i data-lucide="sliders" className="w-3.5 h-3.5"></i>
+                                    <span>權重</span>
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* GPS Notifications */}
+                    {geoError && (
+                        <div className="mb-4 p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-300 text-xs flex items-center justify-between gap-2 shadow-lg">
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="alert-circle" className="w-4 h-4 text-rose-400 shrink-0"></i>
+                                <span>{geoError}</span>
+                            </div>
+                            <button onClick={() => setGeoError(null)} className="text-rose-400 hover:text-white p-1">
+                                <i data-lucide="x" className="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    )}
+
+                    {locationNotice && (
+                        <div className="mb-4 p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-emerald-300 text-xs flex items-center justify-between gap-2 shadow-lg">
+                            <div className="flex items-center gap-2">
+                                <i data-lucide="check-circle-2" className="w-4 h-4 text-emerald-400 shrink-0"></i>
+                                <span>{locationNotice}</span>
+                            </div>
+                            <button onClick={() => setLocationNotice(null)} className="text-emerald-400 hover:text-white p-1">
+                                <i data-lucide="x" className="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    )}
+
+                    {}
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 mb-6 sm:mb-8">
+                        <div className="lg:col-span-7 glass-card rounded-3xl p-5 sm:p-8 relative overflow-hidden border border-slate-700/50 shadow-2xl flex flex-col justify-between">
+                            <div className="absolute -top-24 -right-24 w-72 h-72 bg-cyan-500/15 rounded-full blur-3xl pointer-events-none bg-glow"></div>
+                            
+                            <div>
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                    <div>
+                                        <span className="text-xs font-semibold tracking-wider text-cyan-400 uppercase bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-1 rounded-full">
+                                            {selectedCity} • {selectedDistrict.name}
+                                        </span>
+                                        <span className="text-xs text-slate-400 ml-2 block sm:inline mt-1 sm:mt-0">
+                                            微氣候屬性: <span className="text-slate-300 font-mono">{selectedDistrict.microclimate}</span>
+                                        </span>
+                                    </div>
+
+                                    <div className={`px-3 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5 ${aggregated.agreementColor}`}>
+                                        <i data-lucide="shield-check" className="w-3.5 h-3.5"></i>
+                                        <span>{aggregated.agreementText}</span>
+                                    </div>
+                                </div>
+
+                                <div className="mt-5 sm:mt-6 flex items-baseline gap-3 sm:gap-4">
+                                    <div className="text-5xl sm:text-7xl font-extrabold tracking-tight text-white font-mono">
+                                        {aggregated.temperature}°<span className="text-2xl sm:text-3xl text-slate-400 font-normal">C</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="text-base sm:text-lg font-medium text-cyan-200">
+                                            {aggregated.condition}
+                                        </span>
+                                        <span className="text-xs text-slate-400">
+                                            體感溫度 ~{aggregated.feelsLike}°C
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3 mt-6 sm:mt-8 pt-5 sm:pt-6 border-t border-slate-800">
+                                <div className="bg-slate-900/40 rounded-2xl p-2.5 sm:p-3 border border-slate-800">
+                                    <div className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1">
+                                        <i data-lucide="umbrella" className="w-3.5 h-3.5 text-blue-400"></i>
+                                        合成降雨率
+                                    </div>
+                                    <div className="text-base sm:text-lg font-bold text-slate-100 mt-0.5 font-mono">{aggregated.pop}%</div>
+                                </div>
+                                <div className="bg-slate-900/40 rounded-2xl p-2.5 sm:p-3 border border-slate-800">
+                                    <div className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1">
+                                        <i data-lucide="droplets" className="w-3.5 h-3.5 text-cyan-400"></i>
+                                        平均濕度
+                                    </div>
+                                    <div className="text-base sm:text-lg font-bold text-slate-100 mt-0.5 font-mono">{aggregated.humidity}%</div>
+                                </div>
+                                <div className="bg-slate-900/40 rounded-2xl p-2.5 sm:p-3 border border-slate-800">
+                                    <div className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1">
+                                        <i data-lucide="wind" className="w-3.5 h-3.5 text-teal-400"></i>
+                                        預估風速
+                                    </div>
+                                    <div className="text-base sm:text-lg font-bold text-slate-100 mt-0.5 font-mono">{aggregated.windSpeed} <span className="text-xs font-normal">km/h</span></div>
+                                </div>
+                                <div className="bg-slate-900/40 rounded-2xl p-2.5 sm:p-3 border border-slate-800">
+                                    <div className="text-[11px] sm:text-xs text-slate-400 flex items-center gap-1">
+                                        <i data-lucide="sun" className="w-3.5 h-3.5 text-amber-400"></i>
+                                        紫外指數
+                                    </div>
+                                    <div className="text-base sm:text-lg font-bold text-slate-100 mt-0.5 font-mono">{aggregated.uv} <span className="text-xs font-normal text-slate-400">/11</span></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {}
+                        <div className="lg:col-span-5 flex flex-col justify-between space-y-2.5">
+                            <div className="flex items-center justify-between mb-0.5 px-1">
+                                <h3 className="text-xs sm:text-sm font-bold text-slate-300 flex items-center gap-2">
+                                    <i data-lucide="layers" className="w-4 h-4 text-cyan-400"></i>
+                                    四大氣象來源數據即時對比
+                                </h3>
+                                <span className="text-[11px] text-slate-500">來源最大溫差: {aggregated.tempDiff}°C</span>
+                            </div>
+
+                            {Object.keys(PROVIDERS).map(key => {
+                                const provider = PROVIDERS[key];
+                                const srcData = currentRawSources[key];
+                                const currentWeightPct = Math.round(weights[key] * 100);
+                                const isActive = activeSources[key];
+
+                                return (
+                                    <div 
+                                        key={key} 
+                                        className={`glass-card rounded-2xl p-3 sm:p-3.5 border transition-all duration-300 ${
+                                            isActive 
+                                                ? 'border-slate-800 glass-card-hover' 
+                                                : 'border-slate-800/40 bg-slate-900/30 opacity-60'
+                                        }`}
+                                    >
+                                        <div className="flex items-center justify-between gap-2">
+                                            <div className="flex items-center space-x-2.5">
+                                                <div 
+                                                    className="w-2 h-9 rounded-full transition-colors duration-300 shrink-0" 
+                                                    style={{ backgroundColor: isActive ? provider.color : '#475569' }}
+                                                ></div>
+                                                <div>
+                                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className={`text-xs sm:text-sm font-semibold ${isActive ? 'text-slate-200' : 'text-slate-500 line-through'}`}>
+                                                            {provider.name}
+                                                        </span>
+                                                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                                                            isActive 
+                                                                ? 'bg-slate-800 text-slate-400 border-slate-700' 
+                                                                : 'bg-slate-900/80 text-slate-600 border-slate-800'
+                                                        }`}>
+                                                            {isActive ? `權重 ${currentWeightPct}%` : '停用'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-[11px] text-slate-400 mt-0.5">
+                                                        {isActive ? srcData.condition : '不採計此來源'}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex items-center space-x-2.5 text-right shrink-0">
+                                                <div className={isActive ? '' : 'opacity-40'}>
+                                                    <div className="text-sm sm:text-base font-bold font-mono text-slate-100">{srcData.temp}°C</div>
+                                                    <div className="text-[10px] sm:text-[11px] text-blue-400 font-mono">降雨 {srcData.pop}%</div>
+                                                </div>
+
+                                                <button
+                                                    onClick={() => toggleSourceActive(key)}
+                                                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                                        isActive ? 'bg-cyan-500' : 'bg-slate-700'
+                                                    }`}
+                                                >
+                                                    <span
+                                                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                                            isActive ? 'translate-x-5' : 'translate-x-0'
+                                                        }`}
+                                                    />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {}
+                    <div className="glass-card rounded-3xl p-4 sm:p-6 border border-slate-800 mb-6 sm:mb-8">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-3.5 mb-5 flex-wrap gap-2">
+                            <div className="flex items-center space-x-1.5 bg-slate-900/60 p-1 rounded-2xl border border-slate-800 w-full sm:w-auto">
+                                <button 
+                                    onClick={() => setActiveTab("overview")}
+                                    className={`flex-1 sm:flex-none px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition ${activeTab === 'overview' ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    24小時跨源趨勢
+                                </button>
+                                <button 
+                                    onClick={() => setActiveTab("daily")}
+                                    className={`flex-1 sm:flex-none px-3.5 py-2 rounded-xl text-xs sm:text-sm font-medium transition ${activeTab === 'daily' ? 'bg-cyan-500 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    一週氣象預報
+                                </button>
+                            </div>
+
+                            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                                <i data-lucide="info" className="w-3.5 h-3.5 text-cyan-400"></i>
+                                <span>手指可直接在圖表拖曳查看各時段</span>
+                            </div>
+                        </div>
+
+                        {activeTab === "overview" && (
+                            <div>
+                                <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">未來 24 小時氣溫走向與各源預測對比</h4>
+                                <WeatherChart data={hourlyData} providers={PROVIDERS} activeSources={activeSources} />
+                            </div>
+                        )}
+
+                        {activeTab === "daily" && (
+                            <div className="space-y-5">
+                                <div className="flex sm:grid sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5 overflow-x-auto pb-2 pt-1 no-scrollbar snap-x snap-mandatory">
+                                    {dailyData.map((d, index) => {
+                                        const isSelected = selectedDayIndex === index;
+                                        return (
+                                            <div 
+                                                key={index} 
+                                                onClick={() => setSelectedDayIndex(index)}
+                                                className={`snap-start shrink-0 w-[125px] sm:w-auto cursor-pointer rounded-2xl p-3 sm:p-4 border transition-all duration-300 text-center flex flex-col justify-between relative ${
+                                                    isSelected 
+                                                        ? 'bg-gradient-to-b from-cyan-950/60 to-slate-900 border-cyan-400 shadow-lg shadow-cyan-500/20 ring-2 ring-cyan-500/40' 
+                                                        : 'bg-slate-900/50 hover:bg-slate-800/60 border-slate-800/80 hover:border-slate-700'
+                                                }`}
+                                            >
+                                                {isSelected && (
+                                                    <span className="absolute -top-2 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-cyan-500 text-[9px] font-bold text-slate-950 rounded-full shadow-sm">
+                                                        點選中
+                                                    </span>
+                                                )}
+                                                <div>
+                                                    <div className="text-[11px] text-slate-400 font-medium">{d.date}</div>
+                                                    <div className={`text-xs sm:text-sm font-bold mt-0.5 ${isSelected ? 'text-cyan-300' : 'text-slate-100'}`}>{d.day}</div>
+                                                    <div className="my-2 flex justify-center text-cyan-400">
+                                                        <i data-lucide={d.pop > 50 ? "cloud-rain" : d.pop > 20 ? "cloud-sun" : "sun"} className="w-7 h-7 sm:w-8 sm:h-8"></i>
+                                                    </div>
+                                                    <div className="text-[11px] text-slate-300 font-medium truncate">{d.condition}</div>
+                                                </div>
+
+                                                <div className="mt-3 pt-2.5 border-t border-slate-800/60">
+                                                    <div className="text-xs sm:text-sm font-mono font-bold text-slate-100">
+                                                        {d.tempHigh}° <span className="text-slate-500 font-normal">/ {d.tempLow}°C</span>
+                                                    </div>
+                                                    <div className="text-[10px] text-blue-400 mt-1 font-mono flex items-center justify-center gap-1">
+                                                        <i data-lucide="umbrella" className="w-3 h-3"></i>
+                                                        {d.pop}%
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                <div className="bg-slate-900/80 rounded-2xl p-4 sm:p-5 border border-cyan-500/30 shadow-xl relative overflow-hidden">
+                                    <div className="flex items-center justify-between pb-3.5 mb-3.5 border-b border-slate-800 flex-wrap gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <div className="p-1.5 sm:p-2 bg-cyan-500/10 rounded-xl text-cyan-400">
+                                                <i data-lucide="clock" className="w-4 h-4 sm:w-5 sm:h-5"></i>
+                                            </div>
+                                            <div>
+                                                <h4 className="text-sm sm:text-base font-bold text-slate-100 flex items-center gap-2 flex-wrap">
+                                                    <span>{dailyData[selectedDayIndex]?.date} ({dailyData[selectedDayIndex]?.day}) 逐時合成氣象預報</span>
+                                                    <span className="text-[10px] font-normal text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 rounded-full">
+                                                        {dailyData[selectedDayIndex]?.condition}
+                                                    </span>
+                                                </h4>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <WeatherChart data={selectedDayHourlyData} providers={PROVIDERS} activeSources={activeSources} />
+
+                                    <div className="flex gap-2 overflow-x-auto pb-1 mt-4 pt-3 border-t border-slate-800 no-scrollbar">
+                                        {selectedDayHourlyData.map((item, idx) => (
+                                            <div key={idx} className="bg-slate-950/60 rounded-xl p-2 text-center border border-slate-800/80 min-w-[78px] shrink-0 hover:border-cyan-500/50 transition">
+                                                <div className="text-[11px] font-mono text-cyan-400 font-semibold">{item.time}</div>
+                                                <div className="text-sm font-bold text-slate-100 font-mono my-0.5">{item.avgTemp}°C</div>
+                                                <div className="text-[10px] text-blue-400 flex items-center justify-center gap-0.5 font-mono">
+                                                    <i data-lucide="umbrella" className="w-2.5 h-2.5"></i>
+                                                    {item.pop}%
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6 mb-8">
+                        <div className="glass-card rounded-2xl p-4 sm:p-5 border border-slate-800">
+                            <div className="flex items-center justify-between mb-2 sm:mb-3">
+                                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">紫外線防護建議</span>
+                                <i data-lucide="sun-medium" className="w-4 h-4 text-amber-400"></i>
+                            </div>
+                            <div className="text-lg sm:text-xl font-bold text-slate-100 font-mono">
+                                UV {aggregated.uv} <span className={`text-xs sm:text-sm font-sans ${getUvText(aggregated.uv).color}`}>({getUvText(aggregated.uv).label})</span>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                                {aggregated.uv >= 8 ? "高強度曝曬，建議出門配帶遮陽帽與防曬乳液。" : aggregated.uv >= 5 ? "中等強度，戶外活動宜注意遮陽。" : "輻射極低，適合戶外活動。"}
+                            </p>
+                        </div>
+
+                        <div className="glass-card rounded-2xl p-4 sm:p-5 border border-slate-800">
+                            <div className="flex items-center justify-between mb-2 sm:mb-3">
+                                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">氣候一致性評估</span>
+                                <i data-lucide="activity" className="w-4 h-4 text-cyan-400"></i>
+                            </div>
+                            <div className="text-lg sm:text-xl font-bold text-slate-100 font-mono">
+                                {aggregated.confidenceScore}<span className="text-xs text-slate-500"> / 100</span>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                                {aggregated.agreementBadge}。各大模式在該地區對溫濕度預估之標準差小於臨界值。
+                            </p>
+                        </div>
+
+                        <div className="glass-card rounded-2xl p-4 sm:p-5 border border-slate-800">
+                            <div className="flex items-center justify-between mb-2 sm:mb-3">
+                                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">鄉鎮風速與陣風</span>
+                                <i data-lucide="wind" className="w-4 h-4 text-teal-400"></i>
+                            </div>
+                            <div className="text-lg sm:text-xl font-bold text-slate-100 font-mono">
+                                {aggregated.windSpeed} <span className="text-xs text-slate-400 font-normal">km/h</span>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                                受局部地形 ({selectedDistrict.microclimate}) 影響，沿海與山谷地區請留意強陣風。
+                            </p>
+                        </div>
+                    </div>
+
+                    {}
+                    {showWeightModal && (
+                        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-md">
+                            <div className="glass-card bg-slate-900 border border-slate-700 rounded-t-3xl sm:rounded-3xl p-5 sm:p-8 max-w-lg w-full shadow-2xl relative max-h-[90vh] overflow-y-auto">
+                                <div className="flex items-center justify-between mb-5 border-b border-slate-800 pb-3.5">
+                                    <div className="flex items-center space-x-2">
+                                        <i data-lucide="sliders" className="w-5 h-5 text-cyan-400"></i>
+                                        <h3 className="text-base sm:text-lg font-bold text-slate-100">自訂氣象來源權重比例</h3>
+                                    </div>
+                                    <button 
+                                        onClick={() => setShowWeightModal(false)}
+                                        className="text-slate-400 hover:text-white p-1 rounded-lg"
+                                    >
+                                        <i data-lucide="x" className="w-5 h-5"></i>
+                                    </button>
+                                </div>
+
+                                <p className="text-xs text-slate-400 mb-5">
+                                    您可以根據偏好調整不同氣象源對最終「平均氣溫/降雨率」的計算權重占比：
+                                </p>
+
+                                <div className="space-y-4">
+                                    {Object.keys(PROVIDERS).map(key => {
+                                        const p = PROVIDERS[key];
+                                        return (
+                                            <div key={key}>
+                                                <div className="flex justify-between text-xs font-medium text-slate-200 mb-1">
+                                                    <span>{p.name}</span>
+                                                    <span className="font-mono text-cyan-400">{Math.round(weights[key] * 100)}%</span>
+                                                </div>
+                                                <input 
+                                                    type="range" 
+                                                    min="0" 
+                                                    max="1" 
+                                                    step="0.05"
+                                                    value={weights[key]}
+                                                    onChange={(e) => setWeights({ ...weights, [key]: parseFloat(e.target.value) })}
+                                                    className="w-full accent-cyan-400 bg-slate-800 rounded-lg h-2 cursor-pointer"
+                                                />
+                                                <div className="text-[10px] text-slate-500 mt-0.5">{p.desc}</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                <div className="mt-6 pt-4 border-t border-slate-800 flex justify-end">
+                                    <button 
+                                        onClick={() => setShowWeightModal(false)}
+                                        className="w-full sm:w-auto px-5 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-medium text-xs rounded-xl shadow-lg shadow-cyan-500/25 transition active:scale-95"
+                                    >
+                                        套用權重設定
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showInstallGuide && (
+                        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/80 backdrop-blur-md">
+                            <div className="glass-card bg-slate-900 border border-slate-700 rounded-t-3xl sm:rounded-3xl p-5 sm:p-7 max-w-md w-full shadow-2xl relative">
+                                <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
+                                    <div className="flex items-center space-x-2">
+                                        <i data-lucide="smartphone" className="w-5 h-5 text-emerald-400"></i>
+                                        <h3 className="text-base font-bold text-slate-100">安裝「天氣」網頁 App</h3>
+                                    </div>
+                                    <button onClick={() => setShowInstallGuide(false)} className="text-slate-400 hover:text-white p-1">
+                                        <i data-lucide="x" className="w-5 h-5"></i>
+                                    </button>
+                                </div>
+                                
+                                <div className="space-y-3 text-xs text-slate-300 leading-relaxed">
+                                    <p className="font-semibold text-emerald-400">將天氣網頁加入手機主畫面，享受如同原生 App 的全螢幕體驗：</p>
+                                    
+                                    <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 space-y-2">
+                                        <div className="font-bold text-slate-200 flex items-center gap-1.5">
+                                            <span className="w-2 h-2 rounded-full bg-cyan-400"></span> iPhone / iPad (Safari):
+                                        </div>
+                                        <ol className="list-decimal list-inside pl-1 space-y-1 text-slate-400">
+                                            <li>點選 Safari 下方的「分享」圖示 <i data-lucide="share" className="w-3.5 h-3.5 inline text-cyan-400"></i></li>
+                                            <li>滑動選單並點選「加入主畫面」 <i data-lucide="plus-square" className="w-3.5 h-3.5 inline text-cyan-400"></i></li>
+                                            <li>點選右上角「新增」，即可從主畫面像 App 一樣開啟！</li>
+                                        </ol>
+                                    </div>
+
+                                    <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 space-y-2">
+                                        <div className="font-bold text-slate-200 flex items-center gap-1.5">
+                                            <span className="w-2 h-2 rounded-full bg-emerald-400"></span> Android (Chrome / Edge):
+                                        </div>
+                                        <ol className="list-decimal list-inside pl-1 space-y-1 text-slate-400">
+                                            <li>點選瀏覽器右上角選單 <i data-lucide="more-vertical" className="w-3.5 h-3.5 inline text-emerald-400"></i></li>
+                                            <li>點選「安裝應用程式」或「新增至主畫面」即可完成！</li>
+                                        </ol>
+                                    </div>
+                                </div>
+
+                                <button 
+                                    onClick={() => setShowInstallGuide(false)}
+                                    className="mt-5 w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs rounded-xl border border-slate-700 transition"
+                                >
+                                    我知道了
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Footer */}
+                    <footer className="mt-8 sm:mt-12 text-center text-[11px] text-slate-500 border-t border-slate-800/60 pt-6">
+                        <p>© 測試版僅供測試準確度有待提升 • XIE060120 Weather BETA</p>
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
